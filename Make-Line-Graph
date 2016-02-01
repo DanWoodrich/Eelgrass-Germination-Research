@@ -1,0 +1,356 @@
+#Dummy dataset: https://www.dropbox.com/s/hbkjf9htnmipnhj/Eelgrass_script_DUMMY.csv?dl=0
+seeddata <- read.csv(file.choose())
+
+#User enter desired folder to save graph in (full file path in quotation marks)
+path_Line_Graph <- 
+  
+  ################################ RUN ENTIRE #############################################
+
+
+#required packages 
+require("plyr")
+require("sciplot")
+require("scales")
+
+#change "UK" (unknown) to NA
+seeddata$Ungerminated[seeddata$Ungerminated == "UK"] <- NA
+seeddata$Only_Root[seeddata$Only_Root == "UK"] <- NA
+seeddata$Root_and_Shoot[seeddata$Root_and_Shoot == "UK"] <- NA
+
+seeddata$Ungerminated <- as.character(seeddata$Ungerminated)
+seeddata$Ungerminated <- as.numeric(seeddata$Ungerminated )
+seeddata$Only_Root <- as.character(seeddata$Only_Root)
+seeddata$Only_Root <- as.numeric(seeddata$Only_Root)
+seeddata$Root_and_Shoot <- as.character(seeddata$Root_and_Shoot)
+seeddata$Root_and_Shoot <- as.numeric(seeddata$Root_and_Shoot)
+
+
+seeddata$Rotten.Germinated[is.na(seeddata$Rotten.Germinated == TRUE)] <- 0
+seeddata$Rotten.Germinated <- as.character(seeddata$Rotten.Germinated)
+seeddata$Rotten.Germinated <- as.numeric(seeddata$Rotten.Germinated)
+
+seeddata$all_germ <- seeddata$Only_Root + seeddata$Root_and_Shoot + seeddata$Rotten.Germinated
+
+seeddata$seeds_in_vial <- seeddata$Ungerminated + seeddata$all_germ 
+
+#format date to get days from start:
+seeddata$formatdate <- as.Date(seeddata$Date_of_census,format='%m/%d/%Y')
+
+seeddata$Date_of_census <- format(seeddata$formatdate, format = '%m/%d/%y')
+seeddata$formatdate <- as.POSIXlt(seeddata$Date_of_census,format='%m/%d/%Y')
+
+seeddata$Days_from_start <- seeddata$formatdate$yday-41
+
+seeddata <- arrange(seeddata,seeddata$Days_from_start, seeddata$Vial_number)
+
+#subset data:
+seeddata <- subset(seeddata, seeddata$Sulfide == "N")
+seeddata <- subset(seeddata, seeddata$Date_of_census != '03/26/14')
+#subset dataset so that we retain padilla bay data, but throw out duplicate control treatments between sulfide and salinity expiremnts. 
+PDdata <- subset(seeddata, seeddata$Site =="PD")
+seeddata <- subset(seeddata, seeddata$Experiment == "Salinity")
+seeddata <- rbind(seeddata, PDdata)
+
+
+seeddata$germination_rate <- seeddata$all_germ/seeddata$seeds_in_vial
+
+
+
+#figure out first week of max germination for each vial:
+
+seeddata$condensedtrt_NoDate <- paste(seeddata$Vial_number,seeddata$Site,seeddata$Replicate,seeddata$Salinity,seeddata$Sulfide,seeddata$Oxygen,seeddata$Experiment,sep="-", collapse=NULL)
+
+germmax <- aggregate(seeddata$all_germ, list(seeddata$condensedtrt_NoDate), max, na.rm=TRUE)
+germmax <- as.data.frame(germmax)
+
+treatvec <- unique(seeddata$condensedtrt_NoDate)
+
+#3 functions that will be nested in next loop. Goal for this 1st step is to put max germination in each row, regardless of week, in seeddata. 
+ReturnRow <- function(x){
+  which(germmax$Group.1 == x)
+}
+
+ReturnRow2 <- function(x) {
+  which(seeddata$condensedtrt_NoDate == x )
+}
+
+ReturnMax <- function(x) {
+  germmax[x,2]
+}
+
+seeddata$max[1] <- as.data.frame(ReturnMax(ReturnRow(1)))
+for(i in seeddata$condensedtrt_NoDate){
+  seeddata$max[ReturnRow2(i)] <- ReturnMax(ReturnRow(i))
+}
+#test that above for loop worked:
+
+GermMaxTest <- data.frame(unique(seeddata$condensed))
+
+#since we want to calculate average days till germination, remove vials that don't germinate at all. 
+seeddata$max[seeddata$max == 0] <- NA
+
+#make a column in seeddata that shows the # of days since experiment start when a vial is at max germination, otherwise has NA
+IsMaxTrue <- function(x) {
+  if (seeddata$max[x] == seeddata$all_germ[x] & !is.na(seeddata$all_germ[x]) & !is.na(seeddata$Days_from_start[x]) & !is.na(seeddata$max[x])) {
+    print(seeddata$DaysToMax[x] <- seeddata$Days_from_start[x])
+  } else {
+    print(seeddata$DaysToMax[x] <- NA)
+  }
+}
+
+
+DaysToMax2 <- as.data.frame(IsMaxTrue(1))
+for(n in 1:length(seeddata$Site)){
+  DaysToMax2[n] <- as.data.frame(IsMaxTrue(n))
+}
+
+seeddata$DaysToMax2 <- t(DaysToMax2)[,1]
+
+#repeated this section becuase somehow this is the only way to get it to work
+DaysToMax2 <- as.data.frame(IsMaxTrue(1))
+for(n in 1:length(seeddata$Site)){
+  DaysToMax2[n] <- as.data.frame(IsMaxTrue(n))
+}
+
+seeddata$DaysToMax2 <- t(DaysToMax2)[,1]
+
+MaxDays <- seeddata[is.na(seeddata$DaysToMax2) == FALSE,]
+
+#test that for MaxDays max = all_germ
+
+MaxDays$all_germ == MaxDays$max
+
+#get the minumum value for days until each vial reached max. This will be used to calculate average days till germination. 
+EachVialGermDay <- aggregate(MaxDays$DaysToMax2, list(MaxDays$condensedtrt_NoDate), min, na.rm=TRUE)
+
+#Can double check this did its job right. 
+
+#calculate average days till germination: 
+
+#recombine combinedtrt_NoDate so we can calculate averages for each treatment. 
+splittreat <- strsplit(EachVialGermDay$Group.1, split="-")
+splittreat <- as.data.frame(splittreat)
+
+Site <- splittreat[2, ]
+Site <- as.vector(Site)
+Site <- data.frame(t(Site))
+names(Site)[names(Site)=="X2"] <- "Site"
+
+Sal <- splittreat[4, ]
+Sal <- as.vector(Sal)
+Sal <- data.frame(t(Sal))
+names(Sal)[names(Sal)=="X4"] <- "Salinity"
+
+Sulf <- splittreat[5, ]
+Sulf <- as.vector(Sulf)
+Sulf <- data.frame(t(Sulf))
+names(Sulf)[names(Sulf)=="X5"] <- "Sulfide"
+
+Ox <- splittreat[6, ]
+Ox <- as.vector(Ox)
+Ox <- data.frame(t(Ox))
+names(Ox)[names(Ox)=="X6"] <- "Oxygen"
+
+DaysTill1stMax <- EachVialGermDay$x
+combtreat <- as.data.frame(DaysTill1stMax)
+
+for (n in 1:length(splittreat)){
+  combtreat$treatment[n] <- paste(Site[n,],Sal[n,],Sulf[n,],Ox[n,],sep="")
+}
+
+combtreat <- cbind(combtreat,Site,Sal,Sulf,Ox)
+
+#average time till germination
+GermAverage <- as.data.frame(tapply(combtreat$DaysTill1stMax, combtreat$treatment,mean))
+names(GermAverage)[names(GermAverage)=="tapply(combtreat$DaysTill1stMax, combtreat$treatment, mean)"] <- "Mean_days_till_max"
+
+GermAverageSite <- as.data.frame(tapply(combtreat$DaysTill1stMax, combtreat$Site,mean))
+names(GermAverageSite)[names(GermAverageSite)=="tapply(combtreat$DaysTill1stMax, combtreat$Site, mean)"] <- "Mean_days_till_max"
+
+GermAverageSal <- as.data.frame(tapply(combtreat$DaysTill1stMax, combtreat$Salinity,mean))
+names(GermAverageSal)[names(GermAverageSal)=="tapply(combtreat$DaysTill1stMax, combtreat$Salinity, mean)"] <- "Mean_days_till_max"
+
+GermAverageSulf <- as.data.frame(tapply(combtreat$DaysTill1stMax, combtreat$Sulfide,mean))
+names(GermAverageSulf)[names(GermAverageSulf)=="tapply(combtreat$DaysTill1stMax, combtreat$Sulfide, mean)"] <- "Mean_days_till_max"
+
+GermAverageOx <- as.data.frame(tapply(combtreat$DaysTill1stMax, combtreat$Oxygen,mean))
+names(GermAverageOx)[names(GermAverageOx)=="tapply(combtreat$DaysTill1stMax, combtreat$Oxygen, mean)"] <- "Mean_days_till_max"
+
+GermSD <- as.data.frame(tapply(combtreat$DaysTill1stMax, combtreat$treatment,sd))
+names(GermSD)[names(GermSD)=="tapply(combtreat$DaysTill1stMax, combtreat$treatment, sd)"] <- "sd_days_till_max"
+
+GermSDSite <- as.data.frame(tapply(combtreat$DaysTill1stMax, combtreat$Site,sd))
+names(GermSDSite)[names(GermSDSite)=="tapply(combtreat$DaysTill1stMax, combtreat$Site, sd)"] <- "sd_days_till_max"
+
+GermSDSal <- as.data.frame(tapply(combtreat$DaysTill1stMax, combtreat$Salinity,sd))
+names(GermSDSal)[names(GermSDSal)=="tapply(combtreat$DaysTill1stMax, combtreat$Salinity, sd)"] <- "sd_days_till_max"
+
+GermSDSulf <- as.data.frame(tapply(combtreat$DaysTill1stMax, combtreat$Sulfide,sd))
+names(GermSDSulf)[names(GermSDSulf)=="tapply(combtreat$DaysTill1stMax, combtreat$Sulfide, sd)"] <- "sd_days_till_max"
+
+GermSDOx <- as.data.frame(tapply(combtreat$DaysTill1stMax, combtreat$Oxygen,sd))
+names(GermSDOx)[names(GermSDOx)=="tapply(combtreat$DaysTill1stMax, combtreat$Oxygen, sd)"] <- "sd_days_till_max"
+
+GermAverageSummary <- rbind(GermAverage,GermAverageSite,GermAverageSal,GermAverageSulf,GermAverageOx)
+
+GermSDSummary <- rbind(GermSD,GermSDSite,GermSDSal,GermSDSulf,GermSDOx)
+
+#summary table
+GermSummary <-cbind(GermAverageSummary,GermSDSummary)
+
+#make a column that only shows the minimum days to max on seeddata
+EachVialGermDay <- as.data.frame(EachVialGermDay)
+
+ReturnRow3 <- function(x){
+  which(EachVialGermDay$Group.1 == x)
+}
+
+ReturnMax2 <- function(x) {
+  EachVialGermDay[x,2]
+}
+
+ReturnRow2 <- function(x) {
+  which(seeddata$condensedtrt_NoDate == x )
+}
+
+seeddata$MinDayMaxGerm[1] <- as.data.frame(ReturnMax2(ReturnRow3(1)))
+for(i in unique(EachVialGermDay$Group.1)){
+  seeddata$MinDayMaxGerm[ReturnRow2(i)] <- ReturnMax2(ReturnRow3(i))
+}
+
+seeddata$MinDayMaxGerm[seeddata$MinDayMaxGerm == "numeric(0)"] <- NA
+
+
+#check that MinDayMaxGerm agrees with DaysToMax2
+#for(i in unique(EachVialGermDay$Group.1)) {assign(paste("Vial_",i,sep=""),subset(seeddata, seeddata$condensedtrt_NoDate == i))}
+
+#Remove DaysToMax2
+seeddata$DaysToMax2 <- NULL
+
+class(seeddata)
+str(seeddata)
+
+seeddata$max <- as.character(seeddata$max)
+seeddata$max <- as.numeric(seeddata$max)
+
+seeddata$MinDayMaxGerm <- as.character(seeddata$MinDayMaxGerm)
+seeddata$MinDayMaxGerm <- as.numeric(seeddata$MinDayMaxGerm)
+
+seeddata$condensedtrt_NoVialNumber <- paste(seeddata$Site,seeddata$Salinity,seeddata$Sulfide,seeddata$Oxygen,sep="", collapse=NULL)
+
+#Subset by treatment condition for graphs
+SJCNO <- subset(seeddata, seeddata$Salinity == "C" & seeddata$Site == "SJ" & seeddata$Oxygen =="O" & seeddata$Days_from_start <= 49)
+SJLNO <- subset(seeddata, seeddata$Salinity == "L" & seeddata$Site == "SJ" & seeddata$Oxygen =="O" & seeddata$Days_from_start <= 28)
+SJMNO <- subset(seeddata, seeddata$Salinity == "M" & seeddata$Site == "SJ" & seeddata$Oxygen =="O" & seeddata$Days_from_start <= 43)
+SJLNA <- subset(seeddata, seeddata$Salinity == "L" & seeddata$Site == "SJ" & seeddata$Oxygen =="A" & seeddata$Days_from_start <= 28)
+SJMNA <- subset(seeddata, seeddata$Salinity == "M" & seeddata$Site == "SJ" & seeddata$Oxygen =="A" & seeddata$Days_from_start <= 56)
+SJCNA <- subset(seeddata, seeddata$Salinity == "C" & seeddata$Site == "SJ" & seeddata$Oxygen =="A" & seeddata$Days_from_start <= 35)
+SACNO <- subset(seeddata, seeddata$Salinity == "C" & seeddata$Site == "SA" & seeddata$Oxygen =="O" & seeddata$Days_from_start <= 70)
+SALNO <- subset(seeddata, seeddata$Salinity == "L" & seeddata$Site == "SA" & seeddata$Oxygen =="O" & seeddata$Days_from_start <= 49)
+SAMNO <- subset(seeddata, seeddata$Salinity == "M" & seeddata$Site == "SA" & seeddata$Oxygen =="O" & seeddata$Days_from_start <= 28)
+SALNA <- subset(seeddata, seeddata$Salinity == "L" & seeddata$Site == "SA" & seeddata$Oxygen =="A" & seeddata$Days_from_start <= 28)
+SAMNA <- subset(seeddata, seeddata$Salinity == "M" & seeddata$Site == "SA" & seeddata$Oxygen =="A" & seeddata$Days_from_start <= 28)
+SACNA <- subset(seeddata, seeddata$Salinity == "C" & seeddata$Site == "SA" & seeddata$Oxygen =="A" & seeddata$Days_from_start <= 70)
+
+
+#Subset by combined treatments
+
+SJ <- rbind(SJCNO,SJLNO,SJMNO,SJLNA,SJMNA,SJCNA)
+SA <- rbind(SACNO,SALNO,SAMNO,SALNA,SAMNA,SACNA)
+C <- rbind(SJCNO,SJCNA,SACNO,SACNA)
+L <- rbind(SJLNO,SJLNA,SALNO,SALNA)
+M <- rbind(SJMNO,SJMNA,SAMNO,SAMNA)
+O <- rbind(SJCNO,SJLNO,SJMNO,SACNO,SALNO,SAMNO)
+A <- rbind(SJCNA,SJLNA,SJMNA,SACNA,SALNA,SAMNA)
+
+#vectors for x axis positioning
+xatvec <- c(7,14,21,28,35,42,49,56,63,70,77)-7
+xlabelvec <- as.character(xatvec)
+
+
+#Ship Harbor
+
+jpeg(file.path(path_Line_Graph,"DanWoodrich_LineGraph.jpg"),width=10,height=7.48,units="in",res=300)
+
+par(mfrow=c(4,3), oma = c(3,3.5,1,3.1)+0.2, mar = c(.25,.25,.25,.25), mgp = c(0,0.52,0),xpd=NA)
+
+
+SJLNOPlot <- with(SJLNO,lineplot.CI(x.factor = SJLNO$Days_from_start,SJLNO$germination_rate,xlab='', ylab='', las=2,ylim=c(0,1),main=NULL, x.cont=TRUE, xlim=c(min(xatvec),max(xatvec)), xaxt='n',err.width=0))
+mtext("Low Salinity",side=3,cex=1)
+clip(0,70,0,1)
+
+
+SJMNOPlot <- with(SJMNO,lineplot.CI(x.factor = SJMNO$Days_from_start,SJMNO$germination_rate,xlab='', ylab='', las=2, ylim=c(0,1),main=NULL, x.cont=TRUE, xlim=c(min(xatvec),max(xatvec)), xaxt='n', yaxt='n',err.width=0))
+mtext("Medium Salinity",side=3,cex=1)
+clip(0,70,0,1)
+
+
+
+SJCNOPlot <- with(SJCNO,lineplot.CI(x.factor = SJCNO$Days_from_start,SJCNO$germination_rate, ylim=c(0,1),xlab='', ylab='', las=2, main=NULL, x.cont=TRUE, xlim=c(min(xatvec),max(xatvec)), xaxt='n', yaxt='n',err.width=0))
+mtext("Control Salinity",side=3,cex=1)
+mtext("Oxic",side=4,cex=1,line=0.22)
+clip(0,70,0,1)
+
+
+SJLNAPlot <- with(SJLNA,lineplot.CI(x.factor = SJLNA$Days_from_start,SJLNA$germination_rate,xlab='', ylab='', las=2, ylim=c(0,1),main=NULL, x.cont=TRUE, xlim=c(min(xatvec),max(xatvec)), xaxt='n',err.width=0))
+clip(0,70,0,1)
+
+
+SJMNAPlot <- with(SJMNA,lineplot.CI(x.factor = SJMNA$Days_from_start,SJMNA$germination_rate,xlab='', ylab='', las=2, ylim=c(0,1),main=NULL, x.cont=TRUE, xlim=c(min(xatvec),max(xatvec)), xaxt='n', yaxt='n',err.width=0))
+clip(0,70,0,1)
+
+
+SJCNAPlot <- with(SJCNA,lineplot.CI(x.factor = SJCNA$Days_from_start,SJCNA$germination_rate,xlab='', ylab='', las=2, ylim=c(0,1),main=NULL, x.cont=TRUE, xlim=c(min(xatvec),max(xatvec)), xaxt='n', yaxt='n',err.width=0))
+mtext("Anoxic",side=4,cex=1,line=0.22)
+clip(0,70,0,1)
+
+
+SALNOPlot <- with(SALNO,lineplot.CI(x.factor = SALNO$Days_from_start,SALNO$germination_rate,xlab='', ylab='', las=2, ylim=c(0,1),main=NULL, x.cont=TRUE, xlim=c(min(xatvec),max(xatvec)), xaxt='n',err.width=0))
+clip(0,70,0,1)
+
+
+SAMNOPlot <- with(SAMNO,lineplot.CI(x.factor = SAMNO$Days_from_start,SAMNO$germination_rate,xlab='', ylab='', las=2, ylim=c(0,1),main=NULL, x.cont=TRUE, xlim=c(min(xatvec),max(xatvec)), xaxt='n', yaxt='n',err.width=0))
+clip(0,70,0,1)
+
+
+SACNOPlot <- with(SACNO,lineplot.CI(x.factor = SACNO$Days_from_start,SACNO$germination_rate,xlab='', ylab='', las=2, ylim=c(0,1),main=NULL, x.cont=TRUE, xlim=c(min(xatvec),max(xatvec)), xaxt='n',yaxt='n',err.width=0))
+mtext("Oxic",side=4,cex=1,line=0.22)
+clip(0,70,0,1)
+
+
+SALNAPlot <- with(SALNA,lineplot.CI(x.factor = SALNA$Days_from_start,SALNA$germination_rate,xlab='', ylab='', las=1, ylim=c(0,1),main=NULL, x.cont=TRUE, xlim=c(min(xatvec),max(xatvec)),err.width=0, xaxt='n'))
+axis(1,at=xatvec,labels=xlabelvec)
+clip(0,70,0,1)
+
+
+SAMNAPlot <- with(SAMNA,lineplot.CI(x.factor = SAMNA$Days_from_start,SAMNA$germination_rate,xlab='', ylab='', las=1, ylim=c(0,1),main=NULL, x.cont=TRUE, xlim=c(min(xatvec),max(xatvec)), yaxt='n',err.width=0, xaxt='n'))
+axis(1,at=xatvec,labels=xlabelvec)
+clip(0,70,0,1)
+
+
+SACNAPlot <- with(SACNA,lineplot.CI(x.factor = SACNA$Days_from_start,SACNA$germination_rate,xlab='', ylab='', las=1, ylim=c(0,1),main=NULL, x.cont=TRUE, xlim=c(min(xatvec),max(xatvec)),err.width=0, xaxt='n',yaxt='n'))
+axis(1,at=xatvec,labels=xlabelvec)
+mtext("Anoxic",side=4,cex=1,line=0.22)
+
+title( ylab = expression("Average germination proportion"), outer=TRUE, line=1.3, cex.lab=2.5)
+
+title( xlab = expression("Days since experiment start"), outer=TRUE, line=2.3, cex.lab=2.5)
+
+
+
+text(max(xatvec)+11.2,3.305,"June",cex=2.5,srt=90)
+text(max(xatvec)+11.2,1.065,"August",cex=2.5,srt=90)
+
+segments(max(xatvec)+5,6.75-2.36,max(xatvec)+7.25,6.75-2.36)
+segments(max(xatvec)+7.25,6.75-2.36,max(xatvec)+7.25,4.58-2.36)
+segments(max(xatvec)+5,4.58-2.36,max(xatvec)+7.25,4.58-2.36)
+
+
+segments(max(xatvec)+5,6.75-4.6,max(xatvec)+7.25,6.75-4.6)
+segments(max(xatvec)+7.25,6.75-4.6,max(xatvec)+7.25,4.58-4.6)
+segments(max(xatvec)+5,4.58-4.6,max(xatvec)+7.25,4.58-4.6)
+
+clip(0,70,0,1)
+
+
+dev.off()
